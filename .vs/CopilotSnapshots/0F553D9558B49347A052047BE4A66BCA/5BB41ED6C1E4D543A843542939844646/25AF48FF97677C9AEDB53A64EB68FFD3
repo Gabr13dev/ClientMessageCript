@@ -1,0 +1,193 @@
+﻿// Cliente console demonstrativo usando troca de chaves Diffie-Hellman (ECDH) e AES-GCM
+// Ignora a parte do servidor — aqui implementamos apenas o cliente local que:
+// - gera um par de chaves ECDH
+// - exporta a chave pública em base64 para ser compartilhada com um par
+// - importa a chave pública do par (base64) e calcula a chave compartilhada
+// - deriva uma chave AES-256 a partir do segredo compartilhado
+// - encripta / desencripta mensagens usando AES-GCM
+
+using System;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace ClientMessageCript
+{
+    internal static class Program
+    {
+        private static ECDiffieHellmanCng? _ecdh;
+        private static byte[]? _sharedKey; // chave simétrica derivada (SHA-256)
+
+        private static void Main()
+        {
+            Console.WriteLine("Cliente Diffie-Hellman (local) - apenas client, sem servidor");
+
+            _ecdh = new ECDiffieHellmanCng(ECCurve.NamedCurves.nistP256);
+            _ecdh.KeyDerivationFunction = ECDiffieHellmanKeyDerivationFunction.Hash;
+            _ecdh.HashAlgorithm = CngAlgorithm.Sha256;
+
+            while (true)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Menu:");
+                Console.WriteLine("1) Mostrar chave pública (base64)");
+                Console.WriteLine("2) Receber chave pública do par (base64) e derivar chave compartilhada");
+                Console.WriteLine("3) Encriptar mensagem (usa chave compartilhada)");
+                Console.WriteLine("4) Desencriptar mensagem (base64) (usa chave compartilhada)");
+                Console.WriteLine("5) Sair");
+                Console.Write("Escolha: ");
+
+                var key = Console.ReadLine();
+                if (string.IsNullOrWhiteSpace(key)) continue;
+
+                switch (key.Trim())
+                {
+                    case "1": ShowPublicKey(); break;
+                    case "2": ReceivePeerPublicAndDerive(); break;
+                    case "3": EncryptMessage(); break;
+                    case "4": DecryptMessage(); break;
+                    case "5": return;
+                    default: Console.WriteLine("Opção inválida"); break;
+                }
+            }
+        }
+
+        private static void ShowPublicKey()
+        {
+            if (_ecdh is null) return;
+            // exporta a chave pública no formato de blob ECCPUBLICBLOB (CNG)
+            byte[] pub = _ecdh.PublicKey.ToByteArray();
+            string b64 = Convert.ToBase64String(pub);
+            Console.WriteLine();
+            Console.WriteLine("Chave pública (compartilhe com o par):");
+            Console.WriteLine(b64);
+        }
+
+        private static void ReceivePeerPublicAndDerive()
+        {
+            if (_ecdh is null) return;
+            Console.WriteLine();
+            Console.Write("Cole aqui a chave pública do par (base64): ");
+            string? input = Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                Console.WriteLine("Entrada vazia");
+                return;
+            }
+
+            try
+            {
+                byte[] peerPub = Convert.FromBase64String(input.Trim());
+                using var otherPub = ECDiffieHellmanCngPublicKey.FromByteArray(peerPub, CngKeyBlobFormat.EccPublicBlob);
+                byte[] derived = _ecdh.DeriveKeyMaterial(otherPub); // já faz hash SHA-256 porque configuramos
+
+                // Derivamos uma chave AES-256 a partir do material (caso deriveKeyMaterial retorne <32 bytes, expandimos com SHA256)
+                using var sha = SHA256.Create();
+                _sharedKey = sha.ComputeHash(derived);
+
+                Console.WriteLine("Chave compartilhada derivada com sucesso (AES-256):");
+                Console.WriteLine(BitConverter.ToString(_sharedKey).Replace("-", ""));
+            }
+            catch (FormatException)
+            {
+                Console.WriteLine("Formato inválido: a chave deve estar em base64");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Erro ao derivar chave: {ex.Message}");
+            }
+        }
+
+        private static void EncryptMessage()
+        {
+            if (_sharedKey is null)
+            {
+                Console.WriteLine("Chave compartilhada não definida. Primeiro importe a chave pública do par e derive a chave.");
+                return;
+            }
+
+            Console.Write("Texto a encriptar: ");
+            string? plaintext = Console.ReadLine() ?? string.Empty;
+            byte[] plainBytes = Encoding.UTF8.GetBytes(plaintext);
+
+            // AES-GCM
+            byte[] nonce = RandomNumberGenerator.GetBytes(12);
+            byte[] ciphertext = new byte[plainBytes.Length];
+            byte[] tag = new byte[16];
+
+            try
+            {
+                using var aesgcm = new AesGcm(_sharedKey);
+                aesgcm.Encrypt(nonce, plainBytes, ciphertext, tag);
+
+                // saída: nonce|tag|ciphertext em base64
+                byte[] outBuf = new byte[nonce.Length + tag.Length + ciphertext.Length];
+                Buffer.BlockCopy(nonce, 0, outBuf, 0, nonce.Length);
+                Buffer.BlockCopy(tag, 0, outBuf, nonce.Length, tag.Length);
+                Buffer.BlockCopy(ciphertext, 0, outBuf, nonce.Length + tag.Length, ciphertext.Length);
+
+                string result = Convert.ToBase64String(outBuf);
+                Console.WriteLine("Mensagem encriptada (base64):");
+                Console.WriteLine(result);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Erro na encriptação: {ex.Message}");
+            }
+        }
+
+        private static void DecryptMessage()
+        {
+            if (_sharedKey is null)
+            {
+                Console.WriteLine("Chave compartilhada não definida. Primeiro importe a chave pública do par e derive a chave.");
+                return;
+            }
+
+            Console.Write("Cole o texto encriptado (base64): ");
+            string? input = Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                Console.WriteLine("Entrada vazia");
+                return;
+            }
+
+            try
+            {
+                byte[] buf = Convert.FromBase64String(input.Trim());
+                if (buf.Length < 12 + 16)
+                {
+                    Console.WriteLine("Formato inválido");
+                    return;
+                }
+
+                byte[] nonce = new byte[12];
+                byte[] tag = new byte[16];
+                byte[] ciphertext = new byte[buf.Length - nonce.Length - tag.Length];
+
+                Buffer.BlockCopy(buf, 0, nonce, 0, nonce.Length);
+                Buffer.BlockCopy(buf, nonce.Length, tag, 0, tag.Length);
+                Buffer.BlockCopy(buf, nonce.Length + tag.Length, ciphertext, 0, ciphertext.Length);
+
+                byte[] plain = new byte[ciphertext.Length];
+                using var aesgcm = new AesGcm(_sharedKey);
+                aesgcm.Decrypt(nonce, ciphertext, tag, plain);
+
+                string result = Encoding.UTF8.GetString(plain);
+                Console.WriteLine("Texto descriptografado:");
+                Console.WriteLine(result);
+            }
+            catch (FormatException)
+            {
+                Console.WriteLine("Base64 inválido");
+            }
+            catch (CryptographicException)
+            {
+                Console.WriteLine("Falha de autenticação: dados corrompidos ou chave incorreta");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Erro na desencriptação: {ex.Message}");
+            }
+        }
+    }
+}
