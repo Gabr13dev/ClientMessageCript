@@ -14,6 +14,16 @@ namespace ClientMessageCript
         public string? PayloadBase64 { get; init; }
     }
 
+    internal record ConversationRequest
+    {
+        public string? SenderId { get; init; }
+        public string? RecipientId { get; init; }
+        public string? SenderPublicKey { get; init; }
+        public string? RequestId { get; init; }
+        public DateTime? Timestamp { get; init; }
+        public string? Optional { get; init; }
+    }
+
     internal static class Program
     {
         private static ECDiffieHellmanCng? _ecdh;
@@ -26,6 +36,7 @@ namespace ClientMessageCript
 
         private static ServerConnection? _serverConn;
         private static bool _useServer = false;
+        private static readonly List<ConversationRequest> _pendingRequests = new();
 
         private static void Main()
         {
@@ -47,8 +58,8 @@ namespace ClientMessageCript
 
             if (_useServer)
             {
-                _serverConn = new ServerConnection(serverIp!, 9000, _clientId);
-                _serverConn.OnMessageReceived += OnServerMessage;
+                _serverConn = new ServerConnection(serverIp!, 9000, _clientId, GetPublicKeyBase64());
+                _serverConn.OnEnvelopeReceived += OnServerEnvelope;
                 _serverConn.Start();
             }
             else
@@ -65,26 +76,100 @@ namespace ClientMessageCript
             _serverConn?.Stop();
         }
 
-        private static void OnServerMessage(TransportMessage msg)
+        private static void ListPendingConversations()
+        {
+            if (_pendingRequests.Count == 0) { ConsoleWriteLine("Nenhuma conversa pendente"); return; }
+            Console.WriteLine();
+            for (int i = 0; i < _pendingRequests.Count; i++)
+            {
+                var p = _pendingRequests[i];
+                Console.WriteLine($"{i + 1}) From: {p.SenderId} At: {p.Timestamp:o} Id: {p.RequestId}");
+            }
+            Console.Write("Escolha número para abrir (auto-accept) ou ENTER para voltar: ");
+            string? sel = Console.ReadLine(); if (string.IsNullOrWhiteSpace(sel)) return;
+            if (!int.TryParse(sel.Trim(), out int idx) || idx < 1 || idx > _pendingRequests.Count) { ConsoleWriteLine("Índice inválido"); return; }
+
+            var req = _pendingRequests[idx - 1];
+            var accept = new ConversationRequest { SenderId = _clientId, RecipientId = req.SenderId, SenderPublicKey = GetPublicKeyBase64(), RequestId = req.RequestId, Timestamp = DateTime.UtcNow };
+            try
+            {
+                if (_useServer && _serverConn != null) _serverConn.SendEnvelopeAsync("conversation_accept", accept).GetAwaiter().GetResult();
+                else { var env = new { type = "conversation_accepted", payload = accept }; var file = Path.Combine(_messagesPath, $"{req.SenderId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}_{Guid.NewGuid()}.json"); File.WriteAllText(file, JsonSerializer.Serialize(env)); }
+
+                var conv = new Conversation(req.SenderId ?? string.Empty, req.SenderPublicKey ?? string.Empty); conv.DeriveSharedKey(_ecdh!); _conversations[req.SenderId ?? string.Empty] = conv; SaveConversations();
+                _pendingRequests.RemoveAt(idx - 1); ConsoleWriteLine($"conversation accepted and active with {req.SenderId}");
+            }
+            catch (Exception ex) { ConsoleWriteLine($"Erro ao aceitar conversa: {ex.Message}"); }
+        }
+
+        private static void OnServerEnvelope(string type, string payloadJson)
         {
             try
             {
-                // garante conversa
-                if (!_conversations.TryGetValue(msg.SenderId ?? string.Empty, out var conv))
+                switch (type)
                 {
-                    var c = new Conversation(msg.SenderId ?? string.Empty, msg.SenderPublicKey ?? string.Empty);
-                    c.DeriveSharedKey(_ecdh!);
-                    _conversations[c.PeerId] = c;
-                    SaveConversations();
-                    conv = c;
-                }
+                    case "conversation_request":
+                        {
+                            var req = JsonSerializer.Deserialize<ConversationRequest>(payloadJson);
+                            if (req != null)
+                            {
+                                bool exists = _pendingRequests.Any(p => p.SenderId == req.SenderId && p.RecipientId == req.RecipientId && p.RequestId == req.RequestId);
+                                if (!exists)
+                                {
+                                    _pendingRequests.Add(req);
+                                    ConsoleWriteLine($"[log] conversation_request recebido de {req.SenderId}");
+                                }
+                            }
+                        }
+                        break;
 
-                string clear = DecryptWithSharedKey(conv.SharedKey!, msg.PayloadBase64 ?? string.Empty);
-                ConsoleWriteLine($"[{msg.SenderId}] {clear}");
+                    case "conversation_accepted":
+                    case "conversation_accept":
+                        {
+                            var req = JsonSerializer.Deserialize<ConversationRequest>(payloadJson);
+                            if (req != null)
+                            {
+                                ConsoleWriteLine($"[log] conversation_accepted recebido de {req.SenderId}");
+                                if (req.RecipientId == _clientId)
+                                {
+                                    var peerId = req.SenderId ?? string.Empty;
+                                    var conv = new Conversation(peerId, req.SenderPublicKey ?? string.Empty);
+                                    conv.DeriveSharedKey(_ecdh!);
+                                    _conversations[peerId] = conv;
+                                    SaveConversations();
+                                    ConsoleWriteLine($"Conversa com {peerId} ativa");
+                                }
+                            }
+                        }
+                        break;
+
+                    case "message":
+                        {
+                            var tm = JsonSerializer.Deserialize<TransportMessage>(payloadJson);
+                            if (tm != null)
+                            {
+                                if (!_conversations.TryGetValue(tm.SenderId ?? string.Empty, out var conv))
+                                {
+                                    var c = new Conversation(tm.SenderId ?? string.Empty, tm.SenderPublicKey ?? string.Empty);
+                                    c.DeriveSharedKey(_ecdh!);
+                                    _conversations[c.PeerId] = c;
+                                    SaveConversations();
+                                    conv = c;
+                                }
+                                string clear = DecryptWithSharedKey(conv.SharedKey!, tm.PayloadBase64 ?? string.Empty);
+                                ConsoleWriteLine($"[{tm.SenderId}] {clear}");
+                            }
+                        }
+                        break;
+
+                    default:
+                        ConsoleWriteLine($"[log] envelope desconhecido: {type}");
+                        break;
+                }
             }
             catch (Exception ex)
             {
-                ConsoleWriteLine($"Erro ao processar mensagem do servidor: {ex.Message}");
+                ConsoleWriteLine($"Erro ao processar envelope do servidor: {ex.Message}");
             }
         }
 
@@ -96,8 +181,9 @@ namespace ClientMessageCript
                 Console.WriteLine("Menu:");
                 Console.WriteLine("1) Listar conversas");
                 Console.WriteLine("2) Iniciar nova conversa");
-                Console.WriteLine("3) Mostrar minha chave pública (base64)");
-                Console.WriteLine("4) Sair");
+                Console.WriteLine("3) Conversas Pendentes");
+                Console.WriteLine("4) Mostrar minha chave pública (base64)");
+                Console.WriteLine("5) Sair");
                 Console.Write("Escolha: ");
 
                 var key = Console.ReadLine();
@@ -107,8 +193,9 @@ namespace ClientMessageCript
                 {
                     case "1": ListConversations(); break;
                     case "2": StartConversation(); break;
-                    case "3": ShowMyPublicKey(); break;
-                    case "4": return;
+                    case "3": ListPendingConversations(); break;
+                    case "4": ShowMyPublicKey(); break;
+                    case "5": return;
                     default: ConsoleWriteLine("Opção inválida"); break;
                 }
             }
@@ -174,26 +261,42 @@ namespace ClientMessageCript
                 return;
             }
 
-            // mostra nossa chave pública e pede a do par
+            // inicia conversa: envia start_conversation ao servidor (ou arquivo em modo local)
             string myPub = GetPublicKeyBase64();
-            ConsoleWriteLine("Minha chave pública (compartilhe com o par):");
-            ConsoleWriteLine(myPub);
-            Console.Write("Cole a chave pública do par (base64) para estabelecer a conversa: ");
-            string? peerPub = Console.ReadLine();
-            if (string.IsNullOrWhiteSpace(peerPub)) { ConsoleWriteLine("Public key vazia"); return; }
+            var request = new ConversationRequest
+            {
+                SenderId = _clientId,
+                RecipientId = peerId,
+                SenderPublicKey = myPub,
+                RequestId = Guid.NewGuid().ToString(),
+                Timestamp = DateTime.UtcNow
+            };
 
             try
             {
-                var conv = new Conversation(peerId, peerPub.Trim());
-                conv.DeriveSharedKey(_ecdh!);
-                _conversations[peerId] = conv;
-                SaveConversations();
-                ConsoleWriteLine("Conversa estabelecida. Entrando...");
-                EnterConversation(peerId);
+                SendEnvelopeToPeer("start_conversation", peerId, request).GetAwaiter().GetResult();
+                ConsoleWriteLine($"start_conversation enviado para {peerId}");
+                // o peer receberá conversation_request e deverá aceitar automaticamente ao abrir pendentes
             }
             catch (Exception ex)
             {
-                ConsoleWriteLine($"Erro ao estabelecer conversa: {ex.Message}");
+                ConsoleWriteLine($"Erro ao enviar start_conversation: {ex.Message}");
+            }
+        }
+
+        private static async Task SendEnvelopeToPeer(string type, string recipientId, object payload)
+        {
+            if (_useServer && _serverConn != null)
+            {
+                await _serverConn.SendEnvelopeAsync(type, payload).ConfigureAwait(false);
+            }
+            else
+            {
+                // modo local: grava arquivo para o recipient
+                var envelope = new { type = type, payload = payload };
+                var file = Path.Combine(_messagesPath, $"{recipientId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}_{Guid.NewGuid()}.json");
+                var json = JsonSerializer.Serialize(envelope);
+                File.WriteAllText(file, json);
             }
         }
 
@@ -233,7 +336,7 @@ namespace ClientMessageCript
                 if (_useServer && _serverConn != null)
                 {
                     // envia ao servidor para encaminhamento
-                    _serverConn.SendTransportMessageAsync(msg).GetAwaiter().GetResult();
+                    _serverConn.SendEnvelopeAsync("message", msg).GetAwaiter().GetResult();
                 }
                 else
                 {
@@ -262,21 +365,34 @@ namespace ClientMessageCript
                         try
                         {
                             var json = File.ReadAllText(f);
-                            var msg = JsonSerializer.Deserialize<TransportMessage>(json);
-                            if (msg is null) { File.Delete(f); continue; }
-
-                            // ensure conversation exists
-                            if (!_conversations.TryGetValue(msg.SenderId!, out var conv))
+                            using var doc = JsonDocument.Parse(json);
+                            if (doc.RootElement.TryGetProperty("type", out var typeEl))
                             {
-                                var c = new Conversation(msg.SenderId!, msg.SenderPublicKey ?? string.Empty);
-                                c.DeriveSharedKey(_ecdh!);
-                                _conversations[msg.SenderId!] = c;
-                                SaveConversations();
-                                conv = c;
+                                var type = typeEl.GetString() ?? string.Empty;
+                                var payload = doc.RootElement.TryGetProperty("payload", out var p) ? p : default;
+                                string payloadJson = payload.ValueKind == JsonValueKind.Undefined ? string.Empty : payload.GetRawText();
+                                // reuse server envelope handler for local files
+                                OnServerEnvelope(type, payloadJson);
                             }
+                            else
+                            {
+                                // backward compatibility: plain TransportMessage
+                                var msg = JsonSerializer.Deserialize<TransportMessage>(json);
+                                if (msg is null) { File.Delete(f); continue; }
 
-                            string clear = DecryptWithSharedKey(conv.SharedKey!, msg.PayloadBase64 ?? string.Empty);
-                            ConsoleWriteLine($"[{msg.SenderId}] {clear}");
+                                // ensure conversation exists
+                                if (!_conversations.TryGetValue(msg.SenderId!, out var conv))
+                                {
+                                    var c = new Conversation(msg.SenderId!, msg.SenderPublicKey ?? string.Empty);
+                                    c.DeriveSharedKey(_ecdh!);
+                                    _conversations[msg.SenderId!] = c;
+                                    SaveConversations();
+                                    conv = c;
+                                }
+
+                                string clear = DecryptWithSharedKey(conv.SharedKey!, msg.PayloadBase64 ?? string.Empty);
+                                ConsoleWriteLine($"[{msg.SenderId}] {clear}");
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -391,17 +507,19 @@ namespace ClientMessageCript
             private readonly string _ip;
             private readonly int _port;
             private readonly string _clientId;
+            private readonly string? _publicKey;
             private TcpClient? _tcp;
             private NetworkStream? _ns;
             private CancellationTokenSource? _cts;
 
-            public event Action<TransportMessage>? OnMessageReceived;
+            public event Action<string, string>? OnEnvelopeReceived;
 
-            public ServerConnection(string ip, int port, string clientId)
+            public ServerConnection(string ip, int port, string clientId, string? publicKey = null)
             {
                 _ip = ip;
                 _port = port;
                 _clientId = clientId;
+                _publicKey = publicKey;
             }
 
             public void Start()
@@ -427,8 +545,8 @@ namespace ClientMessageCript
                         await _tcp.ConnectAsync(_ip, _port, token).ConfigureAwait(false);
                         _ns = _tcp.GetStream();
 
-                        // send register
-                        var reg = new { type = "register", clientId = _clientId };
+                        // send register (inclui publicKey opcional)
+                        var reg = new { type = "register", payload = new { clientId = _clientId, publicKey = _publicKey } };
                         await SendProtocolAsync(reg, token).ConfigureAwait(false);
 
                         // receive loop
@@ -446,12 +564,10 @@ namespace ClientMessageCript
                             using var doc = JsonDocument.Parse(json);
                             if (doc.RootElement.TryGetProperty("type", out var typeEl))
                             {
-                                var type = typeEl.GetString();
-                                if (type == "message" && doc.RootElement.TryGetProperty("payload", out var payload))
-                                {
-                                    var msg = JsonSerializer.Deserialize<TransportMessage>(payload.GetRawText());
-                                    if (msg != null) OnMessageReceived?.Invoke(msg);
-                                }
+                                var type = typeEl.GetString() ?? string.Empty;
+                                var payload = doc.RootElement.TryGetProperty("payload", out var p) ? p : default;
+                                string payloadJson = payload.ValueKind == JsonValueKind.Undefined ? string.Empty : payload.GetRawText();
+                                OnEnvelopeReceived?.Invoke(type, payloadJson);
                             }
                         }
                     }
@@ -491,6 +607,12 @@ namespace ClientMessageCript
                 await _ns.WriteAsync(len, 0, len.Length, token).ConfigureAwait(false);
                 await _ns.WriteAsync(bytes, 0, bytes.Length, token).ConfigureAwait(false);
                 await _ns.FlushAsync(token).ConfigureAwait(false);
+            }
+
+            public async Task SendEnvelopeAsync(string type, object payload)
+            {
+                var proto = new { type = type, payload = payload };
+                await SendProtocolAsync(proto, CancellationToken.None).ConfigureAwait(false);
             }
 
             public async Task SendTransportMessageAsync(TransportMessage msg)
