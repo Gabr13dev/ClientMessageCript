@@ -1,0 +1,10 @@
+﻿//usando Troca de chaves Diffie-Hellman vamos criar um CLient que vai enviar pro servidor uma mensagem criptografada usando a chave compartilhada gerada pelo algoritmo Diffie-Hellman. O servidor, por sua vez, irá descriptografar a mensagem usando a mesma chave compartilhada.
+//sera possivel iniciar uma conversa com outro client simplesmente digitando o numero da pessoa que deseja conversar, e o servidor ira encaminhar a mensagem para o outro client, que por sua vez ira descriptografar a mensagem usando a mesma chave compartilhada.
+//a odeoa é usar a troca de chaves Diffie-Hellman para gerar uma chave compartilhada entre o cliente e o servidor, e usar essa chave para criptografar e descriptografar as mensagens enviadas entre eles.
+//depois vamos criar um servidor que vai receber a mensagem criptografada do cliente, descriptografar usando a chave compartilhada e encaminhar para o outro cliente, que por sua vez vai descriptografar a mensagem usando a mesma chave compartilhada.
+//a ideia aqui não é ser funcional (a nivel de produto comercial), mas sim didática, para mostrar como funciona a troca de chaves Diffie-Hellman e como ela pode ser usada para criptografar e descriptografar mensagens entre clientes e servidores.
+// nos vamos escutar tbm tudo que passa dentro do servidor, para mostrar como a troca de chaves Diffie-Hellman funciona na prática, e como ela pode ser usada para proteger as mensagens enviadas entre clientes e servidores.
+//desde a troca de chaves Diffie-Hellman, até a criptografia e descriptografia das mensagens, tudo será mostrado passo a passo, para que qualquer pessoa possa entender como funciona a troca de chaves Diffie-Hellman e como ela pode ser usada para proteger as mensagens enviadas entre clientes e servidores.
+//e tbm o estabelecimento dos numeros inciais ao iniciar a conversa, que são os numeros primos e o gerador, que sao usados para gerar a chave compartilhada entre o cliente e o servidor.
+
+using System;

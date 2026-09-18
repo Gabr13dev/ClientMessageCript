@@ -1,0 +1,15 @@
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\bin\Debug\net10.0\ClientMessageCript.exe
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\bin\Debug\net10.0\ClientMessageCript.deps.json
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\bin\Debug\net10.0\ClientMessageCript.runtimeconfig.json
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\bin\Debug\net10.0\ClientMessageCript.dll
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\bin\Debug\net10.0\ClientMessageCript.pdb
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\ClientMessageCript.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\ClientMessageCript.AssemblyInfoInputs.cache
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\ClientMessageCript.AssemblyInfo.cs
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\ClientMessageCript.csproj.CoreCompileInputs.cache
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\ClientMessageCript.dll
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\refint\ClientMessageCript.dll
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\ClientMessageCript.pdb
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\ClientMessageCript.genruntimeconfig.cache
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\ref\ClientMessageCript.dll
+C:\Users\gabri\source\repos\ClientMessageCript\ClientMessageCript\obj\Debug\net10.0\ClientMe.55F14DE6.Up2Date
